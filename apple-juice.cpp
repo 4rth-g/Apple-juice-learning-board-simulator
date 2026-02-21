@@ -33,6 +33,7 @@
 #include <stdexcept>            // Exceções padrão (std::invalid_argument)
 #include <thread>               // Threads do C++ (std::thread)
 #include <chrono>               // Controle de tempo e delays (std::chrono::duration, sleep_for)
+#include <bitset>               // Representação binária para visualize() do CD4017
 #include <cstdlib>              // Funções utilitárias gerais da biblioteca C (std::exit, std::rand, std::abs, etc.)
 
 
@@ -54,12 +55,26 @@ namespace ray{
 
 
 /*
+    Classe abstrata que representa um chip genérico da placa Apple Juice.
+    Define a interface comum a todos os chips: o método visualize(), exigido pelo
+    requisito de "render/visualizer" do projeto, que imprime o estado interno do chip.
+*/
+class Chip {
+public:
+    virtual ~Chip() = default;
+
+    // Método puro virtual: cada chip deve implementar a impressão do seu estado
+    virtual void visualize() const = 0;
+};
+
+
+/*
     Classe base que simula o funcionamento de um display decodificador CD4026, responsável por incrementar a contagem 
     de 0 a 9 e gerar um sinal de carry quando a contagem reinicia (Out volta a 0). 
 
     a aplicação do virtual é um artifício para o polimorfismo
 */
-class Chip4026 {
+class Chip4026 : public Chip {
 protected:
     bool carryOut = false;      // Indica se houve estouro da contagem (Out voltou a 0)
     unsigned int Out = 0;       // Valor atual do display (0 a 9)
@@ -93,6 +108,11 @@ public:
     bool getCarryOut() const { 
         return carryOut; 
     }
+
+    // Imprime o estado atual do display
+    void visualize() const override {
+        std::cout << "[CD4026] Out=" << Out << " | CarryOut=" << (carryOut ? "true" : "false") << "\n";
+    }
 };
 
 
@@ -101,11 +121,8 @@ public:
     Herda Chip4026 e mantém comportamento padrão da contagem de 0 a 9.
 */
 class Unidade : public Chip4026 {
-public:
-    // O override indica que este método sobrescreve uma função virtual da classe base, assim o polimorfismo funciona em tempo de execução
-    void add() override {
-        Chip4026::add();
-    }
+    // Herda o comportamento padrão de Chip4026 sem modificações.
+    // O polimorfismo em tempo de execução é garantido pelas funções virtuais da classe base.
 };
 
 
@@ -114,6 +131,11 @@ public:
     Herda Chip4026 e adiciona a funcionalidade de incrementar apenas quando recebe um carry da unidade anterior.
 */
 class Dezena : public Chip4026 {
+private:
+    // Impede que add() seja chamado diretamente, forçando o uso de addOnCarry().
+    // Avançar a dezena sem validar o carry seria uma violação da lógica do circuito.
+    using Chip4026::add;
+
 public:
     void addOnCarry(bool carryIn) {
         if (carryIn) {
@@ -210,7 +232,7 @@ static void DrawSevenSegment(ray::Vector2 pos, float size, unsigned int value, r
     Consulte a seção de Astable Mode (Free‑Running) no datasheet do NE555 / LM555 aproximadamente nas páginas 7–8, onde são apresentadas as
     fórmulas e explicações para tHigh, tLow, período e frequência da oscilação.
 */
-class Chip555 {
+class Chip555 : public Chip {
 private:
     double R1, R2, C;
     double tHigh = 0.0;
@@ -260,12 +282,22 @@ public:
     double getPeriod() const { 
         return period; 
     }
+
+    // Reinicia o estado do clock para LOW
+    void reset() {
+        stateHigh = false;
+    }
+
+    // Imprime o estado atual do 555
+    void visualize() const override {
+        std::cout << "[NE555]  f=" << freq << " Hz | T=" << period << " s | State=" << (stateHigh ? "HIGH" : "LOW") << "\n";
+    }
 };
 
 
 // Chip4017 (contador johnsson)
 // Consulte o datasheet do CD4017 para informações mais detalhadas a respeito de seu funcionamento.
-class Chip4017 {
+class Chip4017 : public Chip {
 private:
     unsigned LimitReset;
     uint32_t Out{0};
@@ -299,6 +331,11 @@ public:
 
     unsigned getLimitReset() const { 
         return LimitReset; 
+    }
+
+    // Imprime o estado atual do contador Johnson
+    void visualize() const override {
+        std::cout << "[CD4017] Out=0b" << std::bitset<10>(Out) << " | LimitReset=" << LimitReset << "\n";
     }
 };
 
@@ -362,9 +399,8 @@ static void DrawPanel(ray::Rectangle rec) {
 
 class BoardAppleJuice {
 public:
-    void run() {
+    void run(unsigned qtLeds = 8) {
         // Valores do 555: ajuste para mudar velocidade
-        const unsigned qtLeds = 8; 
         const double R1 = 10000.0;   
         const double R2 = 10000.0;   
         const double C  = 11e-6;    
@@ -534,8 +570,26 @@ public:
 
 // função main: Apenas "orquestra"
 int main() {
-    // try e catch entrariam aqui
-    BoardAppleJuice appleJuice;
-    appleJuice.run();
+    try {
+        std::cout << "=== Simulador Apple Juice ===\n";
+        std::cout << "Quantidade de LEDs (1-10) [padrão: 8]: ";
+
+        unsigned qtLeds = 8;
+        std::string entrada;
+        std::getline(std::cin, entrada);
+
+        if (!entrada.empty()) {
+            qtLeds = static_cast<unsigned>(std::stoul(entrada));
+        }
+
+        BoardAppleJuice appleJuice;
+        appleJuice.run(qtLeds);
+    } catch (const std::invalid_argument& e) {
+        std::cerr << "[Erro de argumento] " << e.what() << "\n";
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "[Erro inesperado] " << e.what() << "\n";
+        return 1;
+    }
     return 0;
 }
